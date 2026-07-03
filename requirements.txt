@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+httpx
+fpdf2
+scapy
+python-multipart
+pandas
+numpy
+scikit-learn
+joblib
+plotly
+matplotlib
+psutil
+python-dotenv
+pytest
+pydantic>=2.0.0
