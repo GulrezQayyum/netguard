@@ -1,18 +1,10 @@
 [submodule "modules/sniffer"]
 	path = modules/sniffer
 	url = https://github.com/GulrezQayyum/network-sniffer
-[submodule "network-traffic-visualizer"]
-	path = network-traffic-visualizer
-	url = https://github.com/GulrezQayyum/network-traffic-visualizer
-[submodule "intrusion-detection-prototype"]
-	path = intrusion-detection-prototype
-	url = https://github.com/GulrezQayyum/intrusion-detection-prototype
 [submodule "modules/detector"]
 	path = modules/detector
 	url = https://github.com/GulrezQayyum/intrusion-detection-prototype
 [submodule "modules/viusalizer"]
 	path = modules/viusalizer
 	url = https://github.com/GulrezQayyum/network-traffic-visualizer
-[submodule "modules/classifier"]
-	path = modules/classifier
-	url = https://github.com/GulrezQayyum/network-traffic-visualizer
+
