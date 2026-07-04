@@ -34,15 +34,15 @@ sys.path.insert(0, str(ROOT / "modules"))
 
 # ── Import from your existing repos ───────────────────────────────────────
 # Sniffer — functions (not a class)
-from modules.sniffer import analyze_packet as sniffer_analyze, get_local_ips
+from modules.sniffer.sniffer import analyze_packet, get_local_ips
 
 # Visualizer — classes
-from modules.viusalizer import PacketCapture
-from modules.viusalizer import DataProcessor
+from modules.viusalizer.src.packet_capture import PacketCapture
+from modules.viusalizer.src.data_processor import DataProcessor
 
 # Intrusion Detector — classes
-from modules.detector import DetectionRules
-from modules.detector import AlertDatabase
+from modules.detector.src.detection.rules import DetectionRules
+from modules.detector.src.logs.alerts import AlertDatabase
 
 # ── Import new NetGuard core ───────────────────────────────────────────────
 from core.remediation import get_remediation

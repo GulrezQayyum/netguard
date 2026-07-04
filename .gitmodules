@@ -7,4 +7,6 @@
 [submodule "modules/viusalizer"]
 	path = modules/viusalizer
 	url = https://github.com/GulrezQayyum/network-traffic-visualizer
-
+[submodule "modules/classifier"]
+	path = modules/classifier
+	url = https://github.com/GulrezQayyum/ai-network-traffic-classifier
