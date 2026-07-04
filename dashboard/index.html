@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>NetGuard — Active Defense Platform</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  /* ── Reset & base ─────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --border:    #30363d;
+    --text:      #e6edf3;
+    --muted:     #8b949e;
+    --green:     #1db954;
+    --yellow:    #e3b341;
+    --red:       #f85149;
+    --blue:      #58a6ff;
+    --purple:    #bc8cff;
+    --radius:    8px;
+    --font:      'Segoe UI', system-ui, sans-serif;
+  }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; line-height: 1.5; }
+
+  /* ── Layout ───────────────────────────────────────────────── */
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; display: flex; align-items: center; justify-content: space-between; height: 56px; position: sticky; top: 0; z-index: 100; }
+  .logo  { font-size: 18px; font-weight: 700; color: var(--green); letter-spacing: -0.5px; }
+  .logo span { color: var(--text); }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 6px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  main { max-width: 1400px; margin: 0 auto; padding: 24px; display: grid; gap: 20px; }
+
+  /* ── Stat cards ───────────────────────────────────────────── */
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .card  { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+  .card-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+  .card-value { font-size: 32px; font-weight: 700; line-height: 1; }
+  .card-value.green  { color: var(--green); }
+  .card-value.yellow { color: var(--yellow); }
+  .card-value.red    { color: var(--red); }
+  .card-value.blue   { color: var(--blue); }
+
+  /* ── Grid panels ──────────────────────────────────────────── */
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .panel  { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .panel-head { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .panel-title { font-weight: 600; font-size: 13px; }
+  .panel-body  { padding: 16px 20px; }
+
+  /* ── Alert feed ───────────────────────────────────────────── */
+  .alert-list { display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto; }
+  .alert-item { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; cursor: pointer; transition: border-color .15s; }
+  .alert-item:hover { border-color: var(--blue); }
+  .badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; text-transform: uppercase; }
+  .badge.HIGH   { background: #f8514922; color: var(--red); border: 1px solid #f8514944; }
+  .badge.MEDIUM { background: #e3b34122; color: var(--yellow); border: 1px solid #e3b34144; }
+  .badge.LOW    { background: #1db95422; color: var(--green); border: 1px solid #1db95444; }
+  .alert-detail { display: flex; flex-direction: column; gap: 2px; }
+  .alert-type { font-weight: 600; font-size: 13px; }
+  .alert-meta { color: var(--muted); font-size: 11px; }
+  .alert-time { color: var(--muted); font-size: 11px; text-align: right; }
+
+  /* ── Remediation panel ────────────────────────────────────── */
+  #remediation-panel { grid-column: 1 / -1; }
+  .remediation-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 32px 0; }
+  .step-list { list-style: none; display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+  .step-list li { display: flex; gap: 12px; align-items: flex-start; }
+  .step-num { background: var(--blue); color: #000; font-weight: 700; font-size: 11px; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+  .step-text { color: var(--text); font-size: 13px; line-height: 1.6; }
+
+  /* ── Blocked IPs table ────────────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th    { text-align: left; color: var(--muted); font-weight: 500; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+  td    { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  .empty-row td { color: var(--muted); text-align: center; padding: 24px; }
+
+  /* ── Analyze form ─────────────────────────────────────────── */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .form-group { display: flex; flex-direction: column; gap: 4px; }
+  .form-group label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .form-group input, .form-group select { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 8px 10px; font-size: 13px; font-family: var(--font); outline: none; transition: border-color .15s; }
+  .form-group input:focus, .form-group select:focus { border-color: var(--blue); }
+  .form-full { grid-column: 1 / -1; }
+
+  /* ── Buttons ──────────────────────────────────────────────── */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-family: var(--font); font-weight: 600; transition: opacity .15s; }
+  .btn:hover { opacity: .85; }
+  .btn-green  { background: var(--green); color: #000; }
+  .btn-red    { background: var(--red); color: #fff; }
+  .btn-blue   { background: var(--blue); color: #000; }
+  .btn-ghost  { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .btn-sm     { padding: 4px 10px; font-size: 11px; }
+
+  /* ── Chart canvas ─────────────────────────────────────────── */
+  .chart-wrap { position: relative; height: 220px; }
+
+  /* ── Scrollbar ────────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ── Notification toast ───────────────────────────────────── */
+  #toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 18px; font-size: 13px; display: none; z-index: 999; max-width: 320px; }
+  #toast.show { display: block; animation: slideIn .2s ease; }
+  @keyframes slideIn { from{transform:translateY(8px);opacity:0} to{transform:translateY(0);opacity:1} }
+
+  /* ── Responsive ───────────────────────────────────────────── */
+  @media(max-width:900px) {
+    .cards  { grid-template-columns: 1fr 1fr; }
+    .panels { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">Net<span>Guard</span></div>
+  <div style="display:flex;align-items:center;gap:20px;">
+    <span style="color:var(--muted);font-size:12px;" id="last-updated">Connecting...</span>
+    <span><span class="status-dot" id="status-dot"></span><span id="status-text" style="font-size:12px;">Live</span></span>
+    <button class="btn btn-ghost btn-sm" onclick="refreshAll()">↻ Refresh</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── Stat cards ─────────────────────────────────────────── -->
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Total Alerts</div>
+      <div class="card-value blue" id="stat-total">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">High Severity</div>
+      <div class="card-value red" id="stat-high">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Blocked IPs</div>
+      <div class="card-value yellow" id="stat-blocked">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Medium Alerts</div>
+      <div class="card-value green" id="stat-medium">—</div>
+    </div>
+  </div>
+
+  <!-- ── Main panels ────────────────────────────────────────── -->
+  <div class="panels">
+
+    <!-- Alert Feed -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">⚡ Live Alert Feed</span>
+        <span style="color:var(--muted);font-size:11px;" id="alert-count">0 alerts</span>
+      </div>
+      <div class="panel-body">
+        <div class="alert-list" id="alert-list">
+          <div style="color:var(--muted);text-align:center;padding:32px 0;font-size:13px;">No alerts yet — submit a packet to start</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Severity Chart -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">📊 Severity Distribution</span>
+      </div>
+      <div class="panel-body">
+        <div class="chart-wrap">
+          <canvas id="severity-chart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Analyze Packet Form -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">🔍 Analyze Packet</span>
+        <span style="color:var(--muted);font-size:11px;">POST /analyze</span>
+      </div>
+      <div class="panel-body">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Source IP</label>
+            <input id="f-src-ip" placeholder="192.168.1.105" value="192.168.1.105"/>
+          </div>
+          <div class="form-group">
+            <label>Dest IP</label>
+            <input id="f-dst-ip" placeholder="8.8.8.8" value="8.8.8.8"/>
+          </div>
+          <div class="form-group">
+            <label>Protocol</label>
+            <select id="f-protocol">
+              <option>TCP</option><option>UDP</option><option>ICMP</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>TCP Flags</label>
+            <select id="f-flags">
+              <option value="">None</option>
+              <option value="S">S — SYN (connection request)</option>
+              <option value="SA">SA — SYN-ACK</option>
+              <option value="A">A — ACK</option>
+              <option value="R">R — RST (reset)</option>
+              <option value="F">F — FIN (close)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Src Port</label>
+            <input id="f-src-port" type="number" placeholder="54321" value="54321"/>
+          </div>
+          <div class="form-group">
+            <label>Dst Port</label>
+            <input id="f-dst-port" type="number" placeholder="80" value="80"/>
+          </div>
+          <div class="form-group">
+            <label>Length (bytes)</label>
+            <input id="f-length" type="number" placeholder="1480" value="1480"/>
+          </div>
+          <div class="form-group">
+            <label>Preset</label>
+            <select id="f-preset" onchange="applyPreset(this.value)">
+              <option value="">— load attack preset —</option>
+              <option value="port_scan">Port Scan</option>
+              <option value="ddos">DDoS SYN Flood</option>
+              <option value="brute_force">Brute Force SSH</option>
+              <option value="normal">Normal Traffic</option>
+            </select>
+          </div>
+          <div class="form-full" style="display:flex;gap:10px;margin-top:4px;">
+            <button class="btn btn-green" onclick="analyzePacket()">▶ Analyze</button>
+            <button class="btn btn-ghost" onclick="clearResult()">Clear</button>
+          </div>
+        </div>
+        <div id="analyze-result" style="margin-top:14px;display:none;">
+          <pre id="analyze-json" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:11px;overflow:auto;max-height:180px;"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Block IP panel -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">🚫 IP Block Manager</span>
+      </div>
+      <div class="panel-body">
+        <div style="display:flex;gap:10px;margin-bottom:16px;">
+          <input id="block-ip-input" placeholder="Enter IP to block…" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:8px 10px;font-size:13px;outline:none;"/>
+          <button class="btn btn-red" onclick="manualBlock()">Block IP</button>
+        </div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr><th>IP Address</th><th>Reason</th><th>Blocked At</th><th>Action</th></tr>
+            </thead>
+            <tbody id="blocked-table">
+              <tr class="empty-row"><td colspan="4">No IPs currently blocked</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top IPs chart -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">🎯 Top Attacking IPs</span>
+      </div>
+      <div class="panel-body">
+        <div class="chart-wrap">
+          <canvas id="ip-chart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Remediation panel — full width -->
+    <div class="panel" id="remediation-panel">
+      <div class="panel-head">
+        <span class="panel-title">🛠 Remediation Guide</span>
+        <span style="color:var(--muted);font-size:11px;" id="rem-severity-badge">—</span>
+      </div>
+      <div class="panel-body" id="remediation-body">
+        <div class="remediation-empty">Analyze a packet to see the remediation guide</div>
+      </div>
+    </div>
+
+  </div><!-- /panels -->
+</main>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+const API = 'http://localhost:8080';
+
+// ── Chart setup ────────────────────────────────────────────────
+let severityChart, ipChart;
+
+function initCharts() {
+  const chartDefaults = {
+    plugins: { legend: { labels: { color: '#8b949e', font: { size: 12 } } } },
+    scales:  { x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
+               y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }
+  };
+
+  severityChart = new Chart(document.getElementById('severity-chart'), {
+    type: 'doughnut',
+    data: { labels: ['HIGH','MEDIUM','LOW'], datasets: [{ data: [0,0,0], backgroundColor: ['#f85149','#e3b341','#1db954'], borderWidth: 0 }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#8b949e', padding: 16 } } } }
+  });
+
+  ipChart = new Chart(document.getElementById('ip-chart'), {
+    type: 'bar',
+    data: { labels: [], datasets: [{ label: 'Alert Count', data: [], backgroundColor: '#58a6ff55', borderColor: '#58a6ff', borderWidth: 1 }] },
+    options: { ...chartDefaults, indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+               plugins: { legend: { display: false } } }
+  });
+}
+
+// ── API helpers ────────────────────────────────────────────────
+async function apiFetch(path, opts={}) {
+  try {
+    const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+    return await r.json();
+  } catch(e) {
+    setOffline();
+    return null;
+  }
+}
+
+function setOffline() {
+  document.getElementById('status-dot').style.background = '#f85149';
+  document.getElementById('status-text').textContent = 'Offline';
+}
+
+// ── Load stats ─────────────────────────────────────────────────
+async function loadStats() {
+  const d = await apiFetch('/stats');
+  if (!d) return;
+  document.getElementById('stat-total').textContent   = d.total_alerts  ?? 0;
+  document.getElementById('stat-blocked').textContent = d.blocked_count ?? 0;
+  document.getElementById('stat-high').textContent    = d.severity?.HIGH   ?? 0;
+  document.getElementById('stat-medium').textContent  = d.severity?.MEDIUM ?? 0;
+  document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  document.getElementById('status-dot').style.background = '#1db954';
+
+  // Update charts
+  const s = d.severity || {};
+  severityChart.data.datasets[0].data = [s.HIGH||0, s.MEDIUM||0, s.LOW||0];
+  severityChart.update();
+
+  if (d.top_ips?.length) {
+    ipChart.data.labels = d.top_ips.map(x => x.ip);
+    ipChart.data.datasets[0].data = d.top_ips.map(x => x.count);
+    ipChart.update();
+  }
+}
+
+// ── Load alerts ────────────────────────────────────────────────
+async function loadAlerts() {
+  const alerts = await apiFetch('/alerts?limit=30');
+  if (!alerts) return;
+  const list = document.getElementById('alert-list');
+  document.getElementById('alert-count').textContent = alerts.length + ' alerts';
+
+  if (!alerts.length) {
+    list.innerHTML = '<div style="color:var(--muted);text-align:center;padding:32px 0;font-size:13px;">No alerts yet</div>';
+    return;
+  }
+
+  list.innerHTML = alerts.map(a => `
+    <div class="alert-item" onclick="showRemediation('${a.alert_type}', '${a.severity}', '${a.src_ip}')">
+      <span class="badge ${a.severity}">${a.severity}</span>
+      <div class="alert-detail">
+        <span class="alert-type">${formatType(a.alert_type)}</span>
+        <span class="alert-meta">${a.src_ip} → ${a.dst_ip || '?'} &nbsp;|&nbsp; port ${a.dst_port || '?'}</span>
+      </div>
+      <div class="alert-time">${timeAgo(a.timestamp)}<br>
+        <button class="btn btn-red btn-sm" style="margin-top:4px;" onclick="event.stopPropagation();quickBlock('${a.src_ip}')">Block</button>
+        <a href="${API}/report/${a.src_ip}" target="_blank"><button class="btn btn-ghost btn-sm" style="margin-top:4px;">PDF</button></a>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── Load blocked IPs ───────────────────────────────────────────
+async function loadBlocked() {
+  const data = await apiFetch('/blocked');
+  if (!data) return;
+  const tbody = document.getElementById('blocked-table');
+  if (!data.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">No IPs currently blocked</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.map(b => `
+    <tr>
+      <td style="font-family:monospace;color:var(--blue)">${b.ip}</td>
+      <td style="color:var(--muted)">${b.reason}</td>
+      <td style="color:var(--muted)">${timeAgo(b.timestamp)}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="unblockIP('${b.ip}')">Unblock</button></td>
+    </tr>
+  `).join('');
+}
+
+// ── Analyze packet ─────────────────────────────────────────────
+async function analyzePacket() {
+  const body = {
+    packet: {
+      src_ip:   document.getElementById('f-src-ip').value,
+      dst_ip:   document.getElementById('f-dst-ip').value,
+      protocol: document.getElementById('f-protocol').value,
+      flags:    document.getElementById('f-flags').value,
+      src_port: +document.getElementById('f-src-port').value || 0,
+      dst_port: +document.getElementById('f-dst-port').value || 0,
+      length:   +document.getElementById('f-length').value  || 0,
+    },
+    features: {}
+  };
+
+  toast('Analyzing packet…', 'blue');
+  const result = await apiFetch('/analyze', { method:'POST', body: JSON.stringify(body) });
+  if (!result) return;
+
+  // Show raw JSON
+  document.getElementById('analyze-result').style.display = 'block';
+  document.getElementById('analyze-json').textContent = JSON.stringify(result, null, 2);
+
+  // Show remediation if present
+  if (result.remediation) {
+    showRemediationData(result.remediation, result.threat_type);
+  }
+
+  if (result.block_result?.success) {
+    toast('⚠ AUTO-BLOCKED ' + body.packet.src_ip, 'red');
+  } else if (result.threat_type) {
+    toast('⚡ Threat detected: ' + formatType(result.threat_type), 'yellow');
+  } else {
+    toast('✓ Traffic looks normal', 'green');
+  }
+
+  refreshAll();
+}
+
+// ── Remediation ────────────────────────────────────────────────
+async function showRemediation(threatType, severity, srcIp) {
+  const data = await apiFetch('/alerts/ip/' + srcIp);
+  if (!data?.length) return;
+  const alert = data[0];
+
+  // Build remediation from known guide
+  const remGuide = {
+    port_scan:         { title: 'Port Scan Detected',      steps: ['Identify source IP','Run whois on IP','Block unrecognised IPs','Review exposed ports','Check: sudo iptables -L -n'] },
+    ddos:              { title: 'DDoS Attack In Progress',  steps: ['Attacking IP auto-blocked','Monitor traffic for 2–3 min','Enable rate limiting if needed','Contact ISP if persistent','Export incident report'] },
+    brute_force:       { title: 'Brute Force Attempt',      steps: ['Source IP auto-blocked','Change targeted account password','Enable two-factor authentication','Check logs: journalctl -u ssh','Install fail2ban'] },
+    malicious_traffic: { title: 'Malicious Traffic (AI)',   steps: ['Isolate source device','Run malware scan','Block destination IP','Check recent installs','Export report as evidence'] },
+    unusual_traffic:   { title: 'Unusual Traffic Pattern',  steps: ['Monitor source IP 10–15 min','Check for scheduled tasks','No immediate action — logged'] },
+  };
+  const guide = remGuide[threatType] || remGuide['unusual_traffic'];
+  showRemediationData({ severity, title: guide.title, steps: guide.steps, what_happened: alert.message }, threatType);
+}
+
+function showRemediationData(rem, threatType) {
+  const sevColor = { high: 'var(--red)', medium: 'var(--yellow)', low: 'var(--green)' };
+  const sev = (rem.severity || 'low').toLowerCase();
+  document.getElementById('rem-severity-badge').innerHTML =
+    `<span style="color:${sevColor[sev]||'var(--muted)'};font-weight:700;text-transform:uppercase;">${sev}</span>`;
+
+  document.getElementById('remediation-body').innerHTML = `
+    <div style="margin-bottom:12px;">
+      <div style="font-weight:700;font-size:15px;margin-bottom:6px;">${rem.title||'Threat Detected'}</div>
+      <div style="color:var(--muted);font-size:13px;">${rem.what_happened||''}</div>
+    </div>
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;">Recommended Actions</div>
+    <ol class="step-list">
+      ${(rem.steps||[]).map((s,i)=>`<li><span class="step-num">${i+1}</span><span class="step-text">${s}</span></li>`).join('')}
+    </ol>
+    ${rem.severity?.toLowerCase()==='high' ? `
+      <div style="margin-top:16px;padding:12px;background:#f8514911;border:1px solid #f8514933;border-radius:6px;font-size:12px;color:var(--red);">
+        ⚠ This is a HIGH severity event — the source IP has been automatically blocked by NetGuard.
+      </div>` : ''}
+  `;
+}
+
+// ── Block / unblock ────────────────────────────────────────────
+async function manualBlock() {
+  const ip = document.getElementById('block-ip-input').value.trim();
+  if (!ip) return;
+  const r = await apiFetch('/block', { method:'POST', body: JSON.stringify({ ip, reason: 'manual' }) });
+  toast(r?.success ? '🚫 Blocked ' + ip : 'Block failed: ' + r?.message, r?.success ? 'red' : 'yellow');
+  loadBlocked(); loadStats();
+}
+
+async function quickBlock(ip) {
+  const r = await apiFetch('/block', { method:'POST', body: JSON.stringify({ ip, reason: 'alert' }) });
+  toast(r?.success ? '🚫 Blocked ' + ip : 'Block failed', r?.success ? 'red' : 'yellow');
+  loadBlocked(); loadStats();
+}
+
+async function unblockIP(ip) {
+  await apiFetch('/block/' + ip, { method: 'DELETE' });
+  toast('✓ Unblocked ' + ip, 'green');
+  loadBlocked(); loadStats();
+}
+
+// ── Presets ────────────────────────────────────────────────────
+function applyPreset(preset) {
+  const presets = {
+    port_scan:   { src_ip:'10.0.0.99', dst_ip:'192.168.1.1', protocol:'TCP', flags:'S', src_port:12345, dst_port:22,  length:60  },
+    ddos:        { src_ip:'185.234.1.1',dst_ip:'192.168.1.1', protocol:'TCP', flags:'S', src_port:1234,  dst_port:80,  length:40  },
+    brute_force: { src_ip:'203.0.113.1',dst_ip:'192.168.1.1', protocol:'TCP', flags:'SA',src_port:55555, dst_port:22,  length:100 },
+    normal:      { src_ip:'192.168.1.5', dst_ip:'142.250.1.1',protocol:'TCP', flags:'A', src_port:44444, dst_port:443, length:500 },
+  };
+  const p = presets[preset];
+  if (!p) return;
+  document.getElementById('f-src-ip').value   = p.src_ip;
+  document.getElementById('f-dst-ip').value   = p.dst_ip;
+  document.getElementById('f-protocol').value = p.protocol;
+  document.getElementById('f-flags').value    = p.flags;
+  document.getElementById('f-src-port').value = p.src_port;
+  document.getElementById('f-dst-port').value = p.dst_port;
+  document.getElementById('f-length').value   = p.length;
+}
+
+function clearResult() {
+  document.getElementById('analyze-result').style.display = 'none';
+  document.getElementById('f-preset').value = '';
+}
+
+// ── Toast ──────────────────────────────────────────────────────
+let toastTimer;
+function toast(msg, color='green') {
+  const colors = { green:'#1db954', yellow:'#e3b341', red:'#f85149', blue:'#58a6ff' };
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.borderColor = colors[color]||colors.green;
+  t.className = 'show';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.className = '', 3000);
+}
+
+// ── Helpers ────────────────────────────────────────────────────
+function formatType(t) {
+  return (t||'unknown').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+}
+
+function timeAgo(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const s = Math.floor((Date.now() - d) / 1000);
+  if (s < 60)   return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  return d.toLocaleTimeString();
+}
+
+// ── Refresh all ────────────────────────────────────────────────
+async function refreshAll() {
+  await Promise.all([loadStats(), loadAlerts(), loadBlocked()]);
+}
+
+// ── Init ───────────────────────────────────────────────────────
+initCharts();
+refreshAll();
+setInterval(refreshAll, 10000);  // auto-refresh every 10s
+</script>
+</body>
+</html>
