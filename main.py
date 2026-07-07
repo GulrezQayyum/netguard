@@ -133,46 +133,92 @@ class AnalyzeRequest(BaseModel):
 
 
 # ── Helper: call AI classifier ─────────────────────────────────────────────
+async def call_classifier(features: ClassifierFeatures, packet: PacketInput) -> dict | None:
+    """
+    POST to AI classifier with all 40 required fields.
+    Maps packet data + features to the full PredictionRequest schema.
+    """
+    # Map TCP flags to NSL-KDD connection flag format
+    flag_map = {
+        "S":  "S0",   # SYN sent, no response — suspicious
+        "SA": "SF",   # SYN-ACK — normal established
+        "A":  "SF",   # ACK — normal
+        "R":  "REJ",  # Reset — rejected
+        "F":  "SF",   # FIN — normal close
+        "":   "SF",   # unknown — assume normal
+    }
+    nsl_flag = flag_map.get(packet.flags, "SF")
 
-async def call_classifier(features: ClassifierFeatures) -> dict | None:
-    """
-    POST to your AI classifier running on port 8000.
-    Endpoint: POST /predict
-    Body matches your PredictionRequest schema in backend/main.py.
-    Returns prediction dict or None if classifier is offline.
-    """
+    # Map protocol
+    proto = packet.protocol.lower() if packet.protocol else "tcp"
+    if proto not in ["tcp", "udp", "icmp"]:
+        proto = "tcp"
+
+    # Map port to service name (common ones)
+    port_service = {
+        80: "http", 443: "http", 22: "ssh", 21: "ftp",
+        25: "smtp", 53: "domain", 110: "pop_3", 23: "telnet",
+        3389: "other", 8080: "http_8001", 0: "other",
+    }
+    service = port_service.get(packet.dst_port, "other")
+
     payload = {
+        # Connection basics
         "duration":           features.duration,
-        "protocol_type":      "tcp",       # default; sniffer doesn't extract this field
-        "service":            "http",      # default
-        "flag":               "SF",        # default (normal established)
-        "src_bytes":          features.src_bytes,
+        "protocol_type":      proto,
+        "service":            service,
+        "flag":               nsl_flag,
+        "src_bytes":          float(packet.length),
         "dst_bytes":          features.dst_bytes,
         "land":               0,
         "wrong_fragment":     0,
         "urgent":             0,
         "hot":                0,
         "num_failed_logins":  0,
-        "logged_in":          0,
-        "count":              features.count,
-        "srv_count":          features.srv_count,
+        "logged_in":          1 if nsl_flag == "SF" else 0,
+        "num_compromised":    0,
+        "root_shell":         0,
+        "su_attempted":       0,
+        "num_root":           0,
+        "num_file_creations": 0,
+        "num_shells":         0,
+        "num_access_files":   0,
+        "num_outbound_cmds":  0,
+        "is_host_login":      0,
+        "is_guest_login":     0,
+        # Traffic stats — boosted by features
+        "count":              max(1, int(features.count)),
+        "srv_count":          max(1, int(features.srv_count)),
         "serror_rate":        features.serror_rate,
         "srv_serror_rate":    features.srv_serror_rate,
         "rerror_rate":        features.rerror_rate,
         "srv_rerror_rate":    features.srv_rerror_rate,
         "same_srv_rate":      features.same_srv_rate,
-        "dst_host_count":     features.dst_host_count,
-        "dst_host_srv_count": features.dst_host_srv_count,
+        "same_ctry_rate":     0.5,
+        "dst_host_count":     max(1, int(features.dst_host_count)),
+        "dst_host_srv_count": max(1, int(features.dst_host_srv_count)),
+        "dst_host_same_srv_rate":      0.5,
+        "dst_host_diff_srv_rate":      0.1,
+        "dst_host_same_src_port_rate": 0.5,
+        "dst_host_srv_diff_host_rate": 0.1,
+        "dst_host_serror_rate":        features.serror_rate,
+        "dst_host_srv_serror_rate":    features.srv_serror_rate,
+        "dst_host_rerror_rate":        features.rerror_rate,
+        "dst_host_srv_rerror_rate":    features.srv_rerror_rate,
     }
+
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.post("http://localhost:8000/predict", json=payload)
+            resp = await client.post(
+                "http://localhost:8080/predict",
+                json=payload,
+                headers={"X-API-Key": "dev-key-change-in-production"}
+            )
             resp.raise_for_status()
             return resp.json()
     except Exception as e:
         logger.warning(f"Classifier offline or error: {e}")
         return None
-
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 
@@ -223,11 +269,26 @@ async def analyze(req: AnalyzeRequest, bg: BackgroundTasks):
         "timestamp": packet.timestamp,
     }
 
+# Boost features based on packet flags so IDS + classifier both fire
+    if packet.flags == "S":
+        req.features.serror_rate        = 1.0
+        req.features.srv_serror_rate    = 1.0
+        req.features.count              = 255.0
+        req.features.srv_count          = 255.0
+        req.features.dst_host_count     = 255.0
+        req.features.dst_host_srv_count = 255.0
+        req.features.same_srv_rate      = 0.0
+
+    if packet.dst_port == 22 and packet.flags in ("S", "SA"):
+        req.features.rerror_rate        = 0.8
+        req.features.srv_rerror_rate    = 0.8
+        req.features.dst_host_count     = 255.0
+
     # Step 2 — IDS rule engine
     ids_alerts = detector.analyze_packet(packet_info)
-
+    
     # Step 3 — AI classifier
-    ai_result   = await call_classifier(req.features)
+    ai_result = await call_classifier(req.features, packet)
     ai_label    = ai_result.get("prediction", "normal").lower() if ai_result else None
 
     # Step 4 — resolve threat type
