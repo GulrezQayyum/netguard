@@ -1247,12 +1247,113 @@ function timeAgo(ts) {
   return new Date(ts).toLocaleTimeString();
 }
 
+// ── Live animated graphs (Traffic / Threats / Packets) ──────────
+const GRAPH_LEN = 40;
+const trafficData = new Array(GRAPH_LEN).fill(0);
+const threatData  = new Array(GRAPH_LEN).fill(0);
+const packetData  = new Array(GRAPH_LEN).fill(0);
+let lastAlertTotal = null;
+
+function pushVal(arr, v) {
+  arr.push(v);
+  if (arr.length > GRAPH_LEN) arr.shift();
+}
+
+function resizeCanvasForDPR(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(1, rect.width), h = Math.max(1, rect.height);
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width  = w * dpr;
+    canvas.height = h * dpr;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+
+function drawWave(canvas, data, colorHex) {
+  const { ctx, w, h } = resizeCanvasForDPR(canvas);
+  ctx.clearRect(0, 0, w, h);
+
+  const max = Math.max(1, ...data);
+  const step = w / (data.length - 1);
+  const yFor = v => h - (v / max) * h * 0.82 - 6;
+
+  // filled area under the line
+  ctx.beginPath();
+  data.forEach((v, i) => {
+    const x = i * step, y = yFor(v);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.lineTo(w, h);
+  ctx.lineTo(0, h);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, colorHex + '4d');
+  grad.addColorStop(1, colorHex + '00');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // glowing line on top
+  ctx.beginPath();
+  data.forEach((v, i) => {
+    const x = i * step, y = yFor(v);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = colorHex;
+  ctx.lineWidth = 2;
+  ctx.shadowBlur = 6;
+  ctx.shadowColor = colorHex;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+// Matches PacketCapture(packet_count=5) with start_capture(timeout=3) in main.py's /visualizer/stats
+const CAPTURE_SECONDS = 3;
+
+async function loadLiveGraphs() {
+  const [vs, stats] = await Promise.all([
+    apiFetch('/visualizer/stats'),
+    apiFetch('/stats'),
+  ]);
+
+  const kbps = vs ? (vs.bandwidth?.total_bytes || 0) / 1024 / CAPTURE_SECONDS : 0;
+  const pps  = vs ? (vs.bandwidth?.packet_count || 0) / CAPTURE_SECONDS : 0;
+  pushVal(trafficData, kbps);
+  pushVal(packetData, pps);
+  document.getElementById('g1-val').textContent = kbps.toFixed(1);
+  document.getElementById('g3-val').textContent = Math.round(pps);
+
+  // Threat activity = new alerts logged since the last poll
+  let delta = 0;
+  if (stats) {
+    const total = stats.total_alerts ?? 0;
+    delta = lastAlertTotal === null ? 0 : Math.max(0, total - lastAlertTotal);
+    lastAlertTotal = total;
+  }
+  pushVal(threatData, delta);
+  document.getElementById('g2-val').textContent = delta;
+
+  drawWave(document.getElementById('g-traffic'), trafficData, '#00f5ff');
+  drawWave(document.getElementById('g-threats'), threatData, '#ff00aa');
+  drawWave(document.getElementById('g-packets'), packetData, '#00ff88');
+}
+
+window.addEventListener('resize', () => {
+  drawWave(document.getElementById('g-traffic'), trafficData, '#00f5ff');
+  drawWave(document.getElementById('g-threats'), threatData, '#ff00aa');
+  drawWave(document.getElementById('g-packets'), packetData, '#00ff88');
+});
+
 // ── Init ───────────────────────────────────────────────────────
 async function refreshAll() {
   await Promise.all([loadStats(), loadAlerts(), loadBlocked()]);
 }
 refreshAll();
+loadLiveGraphs();
 setInterval(refreshAll, 8000);
+setInterval(loadLiveGraphs, 4000);
 </script>
 </body>
 </html>
