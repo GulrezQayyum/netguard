@@ -1,0 +1,9 @@
+# Ignore the HTML dashboard for language statistics
+dashboard/** linguist-vendored
+
+# Ignore generated reports and logs
+reports/** linguist-generated
+logs/** linguist-generated
+
+# Count Python files normally
+*.py linguist-detectable=true
