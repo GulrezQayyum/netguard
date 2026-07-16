@@ -210,11 +210,12 @@ async def call_classifier(features: ClassifierFeatures, packet: PacketInput) -> 
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.post(
-                "http://localhost:8080/predict",
+                "http://localhost:8000/predict",
                 json=payload,
                 headers={"X-API-Key": "dev-key-change-in-production"}
             )
             resp.raise_for_status()
+            print("=== CLASSIFIER RESPONSE ===", resp.json()) 
             return resp.json()
     except Exception as e:
         logger.warning(f"Classifier offline or error: {e}")
