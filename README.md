@@ -1,220 +1,234 @@
-NetGuard — AI Network Traffic Analyzer & Active Defense Platform
-NetGuard is a unified network security platform that combines packet sniffing, traffic visualization, intrusion detection, and AI‑powered traffic classification into a single active defense system with automated remediation.
+## NetGuard — AI Network Traffic Analyzer & Active Defense Platform
 
-Features
-Layer	What happens
-Capture	Scapy captures raw packets from your network interface
-Detect	Rule‑based IDS checks for port scans, SYN floods, DDoS, brute force attacks
-Classify	Random Forest ML model (96.8% accuracy on NSL‑KDD) classifies traffic: Normal / DoS / Probe / R2L / U2R
-Remediate	Maps threat type to plain‑English fix steps
-Block	Automatically fires iptables rules for HIGH severity threats
-Report	Generates downloadable PDF incident reports
-Architecture
-NetGuard orchestrates five submodules (repositories you already own) via a FastAPI backend:
+NetGuard is a unified network security platform that combines packet sniffing, traffic visualization, intrusion detection, and AI‑powered traffic classification into a single active defense system with automated remediation. 
 
-modules/sniffer – packet capture and analysis (from network-sniffer)
+> ⚠️ STATUS: WORK IN PROGRESS  
+> The core architecture is in place, but some critical components are not fully functional (see Known Issues). This project is a collaborative effort – your expertise is needed to get it across the finish line! 
 
-modules/visualizer – live traffic visualisation (from network-traffic-visualizer)
+---
 
-modules/detector – rule‑based intrusion detection (from intrusion-detection-prototype)
+## Demo
 
-modules/classifier – AI classification server (from ai-network-traffic-classifier)
 
-modules/model – trained model artifacts (from network-traffic-classifier-model)
+[Watch full demo (MP4) →](demo/netGuard.mp4)
 
-The orchestrator (main.py) runs on port 8080 and the AI classifier runs as a separate service on port 8000.
+---
 
-Project Structure
-text
+### Vision & Pipeline
+
+NetGuard is designed as a layered pipeline from raw packet capture to active defense:
+
+| Layer      | Goal                                                              | Current Status                         |
+|-----------|-------------------------------------------------------------------|----------------------------------------|
+| Capture   | Scapy captures raw packets from your network interface            | ✅ Works (sniffer submodule integrated) |
+| Detect    | Rule‑based IDS checks for port scans, SYN floods, DDoS, brute force | ✅ Works (detector submodule integrated) |
+| Classify  | Random Forest ML model (96.8% accuracy) classifies traffic as Normal / DoS / Probe / R2L / U2R | ⚠️ Partially integrated – AI server runs but orchestrator fails to parse responses |
+| Remediate | Maps threat type to plain‑English fix steps                       | ✅ Works (`core/remediation.py`)        |
+| Block     | Automatically fires iptables rules for HIGH‑severity threats      | ✅ Works (`core/blocker.py`)            |
+| Report    | Generates downloadable PDF incident reports                       | ❌ Fails with 404 – alert data not persisting correctly |
+
+---
+
+### Project Structure
+
+```text
 netguard/
-├── main.py                  # FastAPI orchestrator
+├── main.py                  # FastAPI orchestrator (BUGGY)
 ├── requirements.txt
 ├── README.md
 ├── core/
-│   ├── __init__.py
-│   ├── remediation.py       # threat → fix steps engine
-│   ├── blocker.py           # iptables block/unblock
-│   └── reporter.py          # PDF incident report generator
+│   ├── remediation.py       # ✅ Works
+│   ├── blocker.py           # ✅ Works
+│   └── reporter.py          # ❌ Needs debugging (PDF generation)
 ├── dashboard/
-│   └── index.html           # browser UI
-├── data/                    # SQLite database (auto-created)
-├── reports/                 # PDF reports (auto-created)
+│   └── index.html           # ✅ Serves UI
+├── data/                    # SQLite database (auto-created) – not populating?
+├── reports/                 # PDF reports (auto-created) – empty?
 └── modules/
-    ├── sniffer/             # submodule: network-sniffer
-    ├── visualizer/          # submodule: network-traffic-visualizer
-    ├── detector/            # submodule: intrusion-detection-prototype
-    ├── classifier/          # submodule: ai-network-traffic-classifier
-    └── model/               # submodule: network-traffic-classifier-model
-Setup
-1. Clone the repository and initialise submodules
-bash
-git clone https://github.com/GulrezQayyum/netguard
-cd netguard
-git submodule update --init --recursive
-If you have not yet added the submodules, use the commands from the original README.
+    ├── sniffer/             # ✅ Integrated
+    ├── visualizer/          # ✅ Integrated
+    ├── detector/            # ✅ Integrated
+    └── classifier/          # ⚠️ AI server runs, but payload/response mismatch
+        └── model/
+            └── saved_models/ # ✅ Model loads with warnings (scikit-learn version mismatch)
+```
 
-2. Create required directories
-bash
-mkdir -p data reports
-3. Create and activate a Python virtual environment
-bash
-python3 -m venv .venv
-source .venv/bin/activate
-4. Install Python dependencies
-bash
-pip install -r requirements.txt
-Key packages: fastapi, uvicorn, httpx, scapy, scikit-learn, joblib, pandas, reportlab, fpdf2.
+---
 
-Running the system
-The system runs as two separate services – you need two terminal windows.
+### What Works
 
-Terminal 1 — AI Classifier (port 8000)
-bash
-cd modules/classifier
-source ../.venv/bin/activate          # if using the same venv
-uvicorn backend.main:app --port 8000 --reload
-Wait for ✅ Model loaded successfully!
+- All four submodules are cloned and initialised correctly.  
+- Classifier service starts, loads the model, and serves `/predict` on port 8000.  
+- Orchestrator (`main.py`) runs and serves the dashboard UI on port 8080.  
+- IDS rules trigger correctly (e.g., SYN flag detection).  
+- `block_ip()` and `unblock_ip()` work with `iptables`.  
+- Remediation mapping returns a fix for each threat type.  
+- `/analyze` endpoint responds and returns a JSON structure.
 
-Terminal 2 — NetGuard Orchestrator (port 8080)
-bash
-cd /path/to/netguard
-sudo /path/to/netguard/.venv/bin/uvicorn main:app --port 8080 --reload
-sudo is required for automatic IP blocking via iptables.
+---
 
-Open the dashboard
-text
-http://localhost:8080
-API Endpoints
-Method	Route	Description
-GET	/	Dashboard UI
-GET	/health	Health check + local IPs
-POST	/analyze	Core pipeline: packet → IDS → AI → remediation → (block)
-GET	/alerts	Recent alerts from SQLite
-GET	/alerts/ip/{ip}	All alerts for a specific IP
-POST	/block	Manually block an IP
-DELETE	/block/{ip}	Unblock an IP
-GET	/blocked	List all blocked IPs
-GET	/report/{ip}	Download PDF incident report
-GET	/stats	Summary stats for dashboard
-GET	/visualizer/stats	Live bandwidth & protocol stats
-GET	/docs	Swagger API documentation
-Example Usage
-Analyze a sample packet
-bash
-curl -X POST http://localhost:8080/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "packet": {
-      "src_ip": "10.0.0.99",
-      "dst_ip": "192.168.1.1",
-      "protocol": "TCP",
-      "flags": "S",
-      "src_port": 12345,
-      "dst_port": 22,
-      "length": 60
-    }
-  }'
-The response will contain ids_alerts, ai_result, threat_type, remediation and (if severity is HIGH) block_result.
+### What’s Broken (Help Needed)
 
-Generate a PDF report for an IP
-bash
-curl -v http://localhost:8080/report/10.0.0.99 --output report.pdf
-Threat Responses
-Threat Type	Severity	Auto Action
-port_scan	MEDIUM	Log only
-ddos	HIGH	Auto‑block + log
-brute_force	HIGH	Auto‑block + log
-malicious_traffic	HIGH	Auto‑block + log
-unusual_traffic	LOW	Log only
-Troubleshooting & Known Issues
-During development and testing, we encountered and resolved several issues. Here is a summary for future reference.
+1. **`ai_result` is always `null`**
 
-1. Submodules not initialised
-Error: Folders inside modules/ are empty.
+   Even though the orchestrator successfully calls the classifier (logs show `200 OK`), the `ai_result` field in the `/analyze` response stays `null`. The orchestrator cannot parse the classifier’s JSON response.  
+   - Suspect: The payload sent to the classifier does not match the 40‑feature schema expected by the model, or the classifier returns an error that is swallowed.  
+   - Need: Debug the `call_classifier()` function in `main.py` and compare the payload against the model’s expected features (defined in `modules/classifier/backend/main.py` and `model/metadata.json`).
 
-Fix: Run git submodule update --init --recursive.
+2. **PDF report returns `404 Not Found`**
 
-2. Missing Python packages (httpx, reportlab, etc.)
-Error: ModuleNotFoundError: No module named 'httpx' (or reportlab).
+   The `/report/{ip}` endpoint fails because it cannot find an alert for the given IP in the SQLite database. This suggests alerts are not being persisted, possibly because the AI step fails (so no alert is logged).  
+   - Need: Fix the alert logging logic – either ensure alerts are saved even when AI fails, or fix the AI integration first.
 
-Fix: Install them in your virtual environment:
+3. **Classifier authentication still blocks requests**
 
-bash
-pip install httpx reportlab
-Also ensure you run the main server with the full path to the venv’s uvicorn to avoid system‑wide Python:
+   The classifier’s `/predict` endpoint originally required an `X-API-Key` header. This was bypassed by commenting out the `verify_api_key` dependency, but remnants may still cause occasional `403` errors.  
+   - Need: Cleanly disable the API key check for local testing, or configure a matching key in both services.
 
-bash
-sudo /path/to/venv/bin/uvicorn main:app --port 8080 --reload
-3. API key error from classifier
-Error: {"detail":"Invalid or missing API key"} when calling /predict.
+4. **Scikit‑learn version warnings**
 
-Fix: Either set API_KEY in modules/classifier/config.py (or .env) to match the header sent by the orchestrator, or disable the authentication check by commenting out the verify_api_key dependency and the Depends in the /predict route.
-We chose to bypass it for local testing.
+   You may see warnings like:  
+   `InconsistentVersionWarning: Trying to unpickle estimator from version 1.8.0 when using version 1.9.0`  
+   - Effect: The model still loads, but this could cause subtle issues.  
+   - Need: Retrain or re‑save the model with the newer scikit‑learn version, or pin the version in `requirements.txt`.
 
-4. Classifier returns 404 because the orchestrator called itself
-Error: In the orchestrator logs:
+5. **Main server must be run with `sudo`**
 
-text
-INFO:httpx:HTTP Request: POST http://localhost:8080/predict "HTTP/1.1 404 Not Found"
-This means main.py was sending the request to port 8080 (itself) instead of port 8000 (the classifier).
+   The orchestrator needs `sudo` for `iptables`, which often forces the system Python instead of the venv Python. The current workaround uses the full venv binary path, which is confusing for new contributors.  
+   - Need: Document the exact command clearly, or find a way to avoid `sudo` (e.g., call `iptables` via `sudo` only in the blocker, or adopt a non‑root alternative).
 
-Fix: In main.py, inside the call_classifier function, change:
+---
 
-python
-resp = await client.post(
-    "http://localhost:8080/predict", ...
-)
-to:
+### How You Can Help (Collaboration)
 
-python
-resp = await client.post(
-    "http://localhost:8000/predict", ...
-)
-5. Scikit‑learn version warnings on classifier startup
-Warning: InconsistentVersionWarning: Trying to unpickle estimator from version 1.8.0 when using version 1.9.0
+We are actively looking for developers to collaborate on fixing the remaining bugs. If you have experience with:  
 
-Effect: The model still loads and works; these warnings can be safely ignored.
+- FastAPI and async Python  
+- scikit‑learn model serving  
+- SQLite and data persistence  
+- Debugging network services  
 
-6. PDF report fails with 404 Not Found
-Cause: The report endpoint requires an existing alert for the requested IP. If no analysis has been performed for that IP, or the analysis did not persist an alert (e.g., if the AI call failed), the report cannot be generated.
+…please reach out or submit a pull request with a fix.
 
-Fix: First run /analyze with that IP to ensure an alert is created. Verify that ai_result is not null in the response.
+**High‑priority tasks:**
 
-7. ai_result stays null even after classifier call succeeds
-Possible reasons:
+- Debug the classifier integration – fix `ai_result` `null` issue.  
+- Make alerts persist so the PDF report can retrieve data.  
+- Simplify the startup process (e.g., single script to launch orchestrator + classifier).  
+- Write unit tests for the core functions.
 
-The classifier response is not in the expected format (e.g., missing prediction key).
+---
 
-An exception occurs while parsing the response (e.g., JSON decode error, network timeout, etc.).
+### Setup Instructions (For Contributors)
 
-Debug: Add print(resp.text) inside the call_classifier function to inspect the raw response. We fixed this by ensuring the payload sent to the classifier matches the 40‑feature schema required by the model.
+1. **Clone and initialise submodules**
 
-Lessons Learned
-Always check the port when integrating microservices.
+   ```bash
+   git clone https://github.com/GulrezQayyum/netguard
+   cd netguard
+   git submodule update --init --recursive
+   ```
 
-Use virtual environments and run with sudo using the full binary path to avoid system‑wide package conflicts.
+2. **Create directories**
 
-Submodules require explicit initialisation; include this step in your setup guide.
+   ```bash
+   mkdir -p data reports
+   ```
 
-API authentication can be bypassed for internal testing, but remember to secure it for production.
+3. **Set up virtual environment**
 
-Test each component separately before integrating – it saves hours of debugging.
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
 
-Built With
-FastAPI – async REST API
+4. **Run the services (two terminals)**
 
-Scapy – packet capture
+   **Terminal 1 – Classifier**
 
-scikit‑learn – Random Forest classifier (96.8% accuracy on NSL‑KDD)
+   ```bash
+   cd modules/classifier
+   source ../.venv/bin/activate
+   uvicorn backend.main:app --port 8000 --reload
+   ```
 
-SQLite – alert persistence
+   **Terminal 2 – Orchestrator**
 
-fpdf2 – PDF report generation
+   ```bash
+   cd /path/to/netguard
+   sudo /path/to/netguard/.venv/bin/uvicorn main:app --port 8080 --reload
+   ```
 
-iptables – IP blocking on Linux
+5. **Test the `/analyze` endpoint**
 
-Chart.js – dashboard visualisations
+   ```bash
+   curl -X POST http://localhost:8080/analyze \
+     -H "Content-Type: application/json" \
+     -d '{"packet":{"src_ip":"10.0.0.99","dst_ip":"192.168.1.1","protocol":"TCP","flags":"S","src_port":12345,"dst_port":22,"length":60}}'
+   ```
 
-License
-This project is submitted as part of a university/portfolio assignment. All submodules are the property of their respective authors.
+   - Expected: A response with `ai_result` **not** `null`.  
+   - Actual: `ai_result` is `null` – this is the bug we need to fix.
 
+---
+
+### Current Debugging Notes
+
+- The classifier responds with valid JSON (e.g., via `print(resp.text)` added in `main.py`).  
+- The orchestrator receives the response but fails to assign it to `ai_result`, likely because `call_classifier()` returns `None` due to an exception that is caught and logged as `"Classifier offline or error"`.  
+- The exception message `"All connection attempts failed"` is misleading: httpx logs show `200 OK`, so the failure is likely in reading / decoding the response body (timeout or JSON decode error).  
+- Immediate next step: Insert detailed logging inside `call_classifier()` to capture response status, headers, and body, then refine based on actual output.
+
+---
+
+### Running & Accessing the Dashboard
+
+Once both services are running:
+
+- Classifier API: `http://localhost:8000/predict`
+- Orchestrator & dashboard: `http://localhost:8080/`
+
+Open your browser and navigate to:
+
+- Main dashboard UI: [http://localhost:8080/](http://localhost:8080/)
+- (Optional) API docs, if enabled: `http://localhost:8080/docs`
+
+---
+
+### Built With
+
+- FastAPI – async REST API  
+- Scapy – packet capture  
+- scikit‑learn – Random Forest classifier (96.8% accuracy on NSL‑KDD)  
+- SQLite – alert persistence  
+- fpdf2 – PDF report generation  
+- iptables – IP blocking on Linux  
+- Chart.js – dashboard visualisations
+
+---
+
+### License
+
+This is a collaborative open‑source project for educational and portfolio purposes. 
+
+---
+
+**Ways you can help:**
+
+- Fix open issues (AI classifier integration, alert persistence, PDF reporting).  
+- Improve documentation and setup scripts for easier onboarding.  
+- Add unit tests and CI for core modules.  
+- Propose and implement new features (e.g., new detection rules, better dashboard, alternative blocking backends).
+
+---
+
+### Collaboration & Call for Contributors
+
+If you’re interested in contributing, please:
+
+- Open an issue on GitHub describing the bug you want to tackle.  
+- Fork the repo, make a fix, and submit a pull request.
+- Share feedback, ideas, or questions via issues or discussions.
+
+Let’s make NetGuard fully functional together! 🚀
