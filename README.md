@@ -101,7 +101,7 @@ netguard/
 
 ### How You Can Help (Collaboration)
 
-We are actively looking for developers to collaborate on fixing the remaining bugs. If you have experience with:  
+I am actively looking for developers to collaborate on fixing the remaining bugs. If you have experience with:  
 
 - FastAPI and async Python  
 - scikit‑learn model serving  
@@ -208,11 +208,6 @@ Open your browser and navigate to:
 
 ---
 
-### License
-
-This is a collaborative open‑source project for educational and portfolio purposes. 
-
----
 
 **Ways you can help:**
 
@@ -230,5 +225,13 @@ If you’re interested in contributing, please:
 - Open an issue on GitHub describing the bug you want to tackle.  
 - Fork the repo, make a fix, and submit a pull request.
 - Share feedback, ideas, or questions via issues or discussions.
+  
+---
+
+### License
+
+This is a collaborative open‑source project for educational and portfolio purposes. 
+
+---
 
 Let’s make NetGuard fully functional together! 🚀
