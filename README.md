@@ -232,6 +232,4 @@ If you’re interested in contributing, please:
 
 This is a collaborative open‑source project for educational and portfolio purposes. 
 
----
-
 Let’s make NetGuard fully functional together! 🚀
