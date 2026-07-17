@@ -17,6 +17,7 @@ Run:
 """
 
 import sys
+import os
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -55,6 +56,14 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s"
 )
 logger = logging.getLogger("netguard")
+
+# ── Classifier service config ──────────────────────────────────────────────
+# In local dev, the classifier runs on localhost:8000 with no API key required
+# (CLASSIFIER_API_KEY defaults to "" which means no X-API-Key header is sent).
+# In staging/production, set NETGUARD_CLASSIFIER_URL and NETGUARD_CLASSIFIER_API_KEY
+# as environment variables to match the classifier service's own auth config.
+CLASSIFIER_URL = os.getenv("NETGUARD_CLASSIFIER_URL", "http://localhost:8000/predict")
+CLASSIFIER_API_KEY = os.getenv("NETGUARD_CLASSIFIER_API_KEY", "")
 
 # ── FastAPI app ────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -209,10 +218,11 @@ async def call_classifier(features: ClassifierFeatures, packet: PacketInput) -> 
 
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
+            headers = {"X-API-Key": CLASSIFIER_API_KEY} if CLASSIFIER_API_KEY else {}
             resp = await client.post(
-                "http://localhost:8000/predict",
+                CLASSIFIER_URL,
                 json=payload,
-                headers={"X-API-Key": "dev-key-change-in-production"}
+                headers=headers
             )
             resp.raise_for_status()
             print("=== CLASSIFIER RESPONSE ===", resp.json()) 
