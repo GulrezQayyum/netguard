@@ -10,7 +10,7 @@ NetGuard is a unified network security platform that combines packet sniffing, t
 ## Demo
 
 
-[Watch full demo (MP4) →](demo/netGuard.mp4)
+[Watch full demo (MP4) →](assets/netGuard.mp4)
 
 ---
 
