@@ -18,8 +18,11 @@ Run:
 
 import sys
 import logging
+import json
+import sqlite3
 from pathlib import Path
 from datetime import datetime
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, BackgroundTasks, HTTPException
@@ -77,6 +80,9 @@ app.mount("/static", StaticFiles(directory=str(ROOT / "dashboard")), name="stati
 # ── Global state ───────────────────────────────────────────────────────────
 detector = DetectionRules()
 alert_db = AlertDatabase(db_path="data/alerts.db")
+ALERTS_DB_PATH = ROOT / "data" / "alerts.db"
+CLASSIFIER_URL = "http://localhost:8000/predict"
+CLASSIFIER_API_KEY = "dev-key-change-in-production"
 
 # ── Map AI classifier labels → remediation threat types ───────────────────
 # Your classifier outputs: dos, normal, probe, r2l, u2r
@@ -132,94 +138,170 @@ class AnalyzeRequest(BaseModel):
     features: ClassifierFeatures = ClassifierFeatures()  # optional; defaults to zeros
 
 
+def _ensure_alert_table() -> None:
+    ALERTS_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(ALERTS_DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                src_ip TEXT NOT NULL,
+                dst_ip TEXT,
+                src_port INTEGER,
+                dst_port INTEGER,
+                message TEXT,
+                details TEXT
+            )
+            """
+        )
+        conn.commit()
+
+
+def _persist_alert_local(alert_record: dict[str, Any]) -> None:
+    _ensure_alert_table()
+    with sqlite3.connect(ALERTS_DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO alerts (
+                timestamp, alert_type, severity, src_ip, dst_ip,
+                src_port, dst_port, message, details
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                alert_record.get("timestamp"),
+                alert_record.get("alert_type"),
+                alert_record.get("severity", "LOW"),
+                alert_record.get("src_ip"),
+                alert_record.get("dst_ip"),
+                alert_record.get("src_port", 0),
+                alert_record.get("dst_port", 0),
+                alert_record.get("message", ""),
+                alert_record.get("details", ""),
+            ),
+        )
+        conn.commit()
+
+
+def _log_alert(alert_record: dict[str, Any]) -> None:
+    try:
+        alert_db.log_alert(alert_record)
+    except Exception as exc:
+        logger.warning("Primary alert logger failed, using local SQLite fallback: %s", exc)
+        _persist_alert_local(alert_record)
+
+
+def _build_classifier_payload(packet: PacketInput, features: ClassifierFeatures) -> dict[str, Any]:
+    flag_map = {
+        "S": "S0",
+        "SA": "SF",
+        "A": "SF",
+        "R": "REJ",
+        "F": "SF",
+        "": "SF",
+    }
+    proto = (packet.protocol or "tcp").lower()
+    if proto not in {"tcp", "udp", "icmp"}:
+        proto = "tcp"
+
+    port_service = {
+        80: "http",
+        443: "http",
+        22: "ssh",
+        21: "ftp",
+        25: "smtp",
+        53: "domain",
+        110: "pop_3",
+        23: "telnet",
+        3389: "other",
+        8080: "http_8001",
+        0: "other",
+    }
+    return {
+        "duration": features.duration,
+        "protocol_type": proto,
+        "service": port_service.get(packet.dst_port, "other"),
+        "flag": flag_map.get(packet.flags, "SF"),
+        "src_bytes": float(packet.length),
+        "dst_bytes": features.dst_bytes,
+        "land": 0,
+        "wrong_fragment": 0,
+        "urgent": 0,
+        "hot": 0,
+        "num_failed_logins": 0,
+        "logged_in": 1 if flag_map.get(packet.flags, "SF") == "SF" else 0,
+        "num_compromised": 0,
+        "root_shell": 0,
+        "su_attempted": 0,
+        "num_root": 0,
+        "num_file_creations": 0,
+        "num_shells": 0,
+        "num_access_files": 0,
+        "num_outbound_cmds": 0,
+        "is_host_login": 0,
+        "is_guest_login": 0,
+        "count": max(1, int(features.count)),
+        "srv_count": max(1, int(features.srv_count)),
+        "serror_rate": features.serror_rate,
+        "srv_serror_rate": features.srv_serror_rate,
+        "rerror_rate": features.rerror_rate,
+        "srv_rerror_rate": features.srv_rerror_rate,
+        "same_srv_rate": features.same_srv_rate,
+        "same_ctry_rate": 0.5,
+        "dst_host_count": max(1, int(features.dst_host_count)),
+        "dst_host_srv_count": max(1, int(features.dst_host_srv_count)),
+        "dst_host_same_srv_rate": 0.5,
+        "dst_host_diff_srv_rate": 0.1,
+        "dst_host_same_src_port_rate": 0.5,
+        "dst_host_srv_diff_host_rate": 0.1,
+        "dst_host_serror_rate": features.serror_rate,
+        "dst_host_srv_serror_rate": features.srv_serror_rate,
+        "dst_host_rerror_rate": features.rerror_rate,
+        "dst_host_srv_rerror_rate": features.srv_rerror_rate,
+    }
+
+
+def _parse_classifier_response(resp: httpx.Response) -> dict[str, Any]:
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise ValueError(f"classifier response was not valid JSON: {resp.text[:500]}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"classifier response must be an object, got {type(payload).__name__}")
+    if "prediction" not in payload:
+        raise ValueError(f"classifier response missing prediction field: {payload}")
+    return payload
+
+
 # ── Helper: call AI classifier ─────────────────────────────────────────────
 async def call_classifier(features: ClassifierFeatures, packet: PacketInput) -> dict | None:
     """
     POST to AI classifier with all 40 required fields.
     Maps packet data + features to the full PredictionRequest schema.
     """
-    # Map TCP flags to NSL-KDD connection flag format
-    flag_map = {
-        "S":  "S0",   # SYN sent, no response — suspicious
-        "SA": "SF",   # SYN-ACK — normal established
-        "A":  "SF",   # ACK — normal
-        "R":  "REJ",  # Reset — rejected
-        "F":  "SF",   # FIN — normal close
-        "":   "SF",   # unknown — assume normal
-    }
-    nsl_flag = flag_map.get(packet.flags, "SF")
-
-    # Map protocol
-    proto = packet.protocol.lower() if packet.protocol else "tcp"
-    if proto not in ["tcp", "udp", "icmp"]:
-        proto = "tcp"
-
-    # Map port to service name (common ones)
-    port_service = {
-        80: "http", 443: "http", 22: "ssh", 21: "ftp",
-        25: "smtp", 53: "domain", 110: "pop_3", 23: "telnet",
-        3389: "other", 8080: "http_8001", 0: "other",
-    }
-    service = port_service.get(packet.dst_port, "other")
-
-    payload = {
-        # Connection basics
-        "duration":           features.duration,
-        "protocol_type":      proto,
-        "service":            service,
-        "flag":               nsl_flag,
-        "src_bytes":          float(packet.length),
-        "dst_bytes":          features.dst_bytes,
-        "land":               0,
-        "wrong_fragment":     0,
-        "urgent":             0,
-        "hot":                0,
-        "num_failed_logins":  0,
-        "logged_in":          1 if nsl_flag == "SF" else 0,
-        "num_compromised":    0,
-        "root_shell":         0,
-        "su_attempted":       0,
-        "num_root":           0,
-        "num_file_creations": 0,
-        "num_shells":         0,
-        "num_access_files":   0,
-        "num_outbound_cmds":  0,
-        "is_host_login":      0,
-        "is_guest_login":     0,
-        # Traffic stats — boosted by features
-        "count":              max(1, int(features.count)),
-        "srv_count":          max(1, int(features.srv_count)),
-        "serror_rate":        features.serror_rate,
-        "srv_serror_rate":    features.srv_serror_rate,
-        "rerror_rate":        features.rerror_rate,
-        "srv_rerror_rate":    features.srv_rerror_rate,
-        "same_srv_rate":      features.same_srv_rate,
-        "same_ctry_rate":     0.5,
-        "dst_host_count":     max(1, int(features.dst_host_count)),
-        "dst_host_srv_count": max(1, int(features.dst_host_srv_count)),
-        "dst_host_same_srv_rate":      0.5,
-        "dst_host_diff_srv_rate":      0.1,
-        "dst_host_same_src_port_rate": 0.5,
-        "dst_host_srv_diff_host_rate": 0.1,
-        "dst_host_serror_rate":        features.serror_rate,
-        "dst_host_srv_serror_rate":    features.srv_serror_rate,
-        "dst_host_rerror_rate":        features.rerror_rate,
-        "dst_host_srv_rerror_rate":    features.srv_rerror_rate,
-    }
-
     try:
+        payload = _build_classifier_payload(packet, features)
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.post(
-                "http://localhost:8000/predict",
+                CLASSIFIER_URL,
                 json=payload,
-                headers={"X-API-Key": "dev-key-change-in-production"}
+                headers={"X-API-Key": CLASSIFIER_API_KEY},
             )
             resp.raise_for_status()
-            print("=== CLASSIFIER RESPONSE ===", resp.json()) 
-            return resp.json()
-    except Exception as e:
-        logger.warning(f"Classifier offline or error: {e}")
-        return None
+            result = _parse_classifier_response(resp)
+            logger.info("Classifier response parsed: %s", result)
+            return result
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        logger.warning("Classifier transport error: %s", exc)
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Classifier HTTP error: %s body=%s", exc, getattr(exc.response, "text", ""))
+    except ValueError as exc:
+        logger.warning("Classifier parse error: %s", exc)
+    except Exception as exc:
+        logger.exception("Unexpected classifier error: %s", exc)
+    return None
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 
@@ -290,7 +372,7 @@ async def analyze(req: AnalyzeRequest, bg: BackgroundTasks):
     
     # Step 3 — AI classifier
     ai_result = await call_classifier(req.features, packet)
-    ai_label    = ai_result.get("prediction", "normal").lower() if ai_result else None
+    ai_label = ai_result.get("prediction", "normal").lower() if ai_result else None
 
     # Step 4 — resolve threat type
     # Priority: AI label > IDS alert type > None
@@ -323,7 +405,7 @@ async def analyze(req: AnalyzeRequest, bg: BackgroundTasks):
     if ids_alerts or threat_type:
         alert_record = {
             "timestamp":  packet.timestamp,
-            "alert_type": threat_type or ids_alerts[0].get("rule_type", "unknown"),
+            "alert_type": threat_type or (ids_alerts[0].get("rule_type", "unknown") if ids_alerts else "unknown"),
             "severity":   remediation["severity"].upper() if remediation else "LOW",
             "src_ip":     packet.src_ip,
             "dst_ip":     packet.dst_ip,
@@ -332,7 +414,7 @@ async def analyze(req: AnalyzeRequest, bg: BackgroundTasks):
             "message":    remediation["title"] if remediation else "IDS alert",
             "details":    str(ids_alerts),
         }
-        bg.add_task(alert_db.log_alert, alert_record)
+        bg.add_task(_log_alert, alert_record)
 
     # Step 7 — respond
     return {
