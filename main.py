@@ -210,7 +210,7 @@ async def call_classifier(features: ClassifierFeatures, packet: PacketInput) -> 
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.post(
-                "http://localhost:8000/predict",
+                "http://127.0.0.1:8000/predict",
                 json=payload,
                 headers={"X-API-Key": "dev-key-change-in-production"}
             )
