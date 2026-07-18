@@ -81,6 +81,7 @@ app.mount("/static", StaticFiles(directory=str(ROOT / "dashboard")), name="stati
 detector = DetectionRules()
 alert_db = AlertDatabase(db_path="data/alerts.db")
 ALERTS_DB_PATH = ROOT / "data" / "alerts.db"
+ALERTS_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 CLASSIFIER_URL = "http://localhost:8000/predict"
 CLASSIFIER_API_KEY = "dev-key-change-in-production"
 
@@ -186,11 +187,34 @@ def _persist_alert_local(alert_record: dict[str, Any]) -> None:
 
 
 def _log_alert(alert_record: dict[str, Any]) -> None:
+    _persist_alert_local(alert_record)
     try:
         alert_db.log_alert(alert_record)
     except Exception as exc:
-        logger.warning("Primary alert logger failed, using local SQLite fallback: %s", exc)
-        _persist_alert_local(alert_record)
+        logger.warning("Secondary alert logger failed after local persistence: %s", exc)
+
+
+def _fetch_alerts_by_ip(src_ip: str, limit: int = 100) -> list[dict[str, Any]]:
+    _ensure_alert_table()
+    with sqlite3.connect(ALERTS_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT *
+            FROM alerts
+            WHERE src_ip = ?
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?
+            """,
+            (src_ip, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_latest_alert_by_ip(src_ip: str) -> dict[str, Any] | None:
+    rows = _fetch_alerts_by_ip(src_ip, limit=1)
+    return rows[0] if rows else None
 
 
 def _build_classifier_payload(packet: PacketInput, features: ClassifierFeatures) -> dict[str, Any]:
@@ -431,22 +455,27 @@ async def analyze(req: AnalyzeRequest, bg: BackgroundTasks):
 @app.get("/alerts")
 def get_alerts(limit: int = 50):
     """Return recent alerts from SQLite."""
-    return alert_db.get_recent_alerts(limit=limit)
+    _ensure_alert_table()
+    with sqlite3.connect(ALERTS_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT *
+            FROM alerts
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cur.fetchall()]
 
 
 @app.get("/alerts/ip/{src_ip}")
 def get_alerts_by_ip(src_ip: str):
     """Return all alerts for a specific source IP."""
     try:
-        import sqlite3
-        with sqlite3.connect("data/alerts.db") as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT * FROM alerts WHERE src_ip = ? ORDER BY timestamp DESC LIMIT 100",
-                (src_ip,)
-            )
-            return [dict(r) for r in cur.fetchall()]
+        return _fetch_alerts_by_ip(src_ip)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -475,23 +504,15 @@ def export_report(src_ip: str):
     Generate and download a PDF incident report for a given source IP.
     Pulls the most recent alert for that IP from SQLite.
     """
-    import sqlite3
     try:
-        with sqlite3.connect("data/alerts.db") as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT * FROM alerts WHERE src_ip = ? ORDER BY timestamp DESC LIMIT 1",
-                (src_ip,)
-            )
-            row = cur.fetchone()
+        row = _fetch_latest_alert_by_ip(src_ip)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     if not row:
         raise HTTPException(status_code=404, detail=f"No alerts found for IP: {src_ip}")
 
-    alert    = dict(row)
+    alert = dict(row)
     threat   = alert.get("alert_type", "unusual_traffic")
     remediation  = get_remediation(threat)
     block_result = next((b for b in get_blocked_ips() if b["ip"] == src_ip), None)
@@ -510,11 +531,11 @@ def get_stats():
     Summary stats for the dashboard header cards.
     Returns total alerts, blocked IPs, and severity breakdown.
     """
-    import sqlite3
     blocked = get_blocked_ips()
 
     try:
-        with sqlite3.connect("data/alerts.db") as conn:
+        _ensure_alert_table()
+        with sqlite3.connect(ALERTS_DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
 
